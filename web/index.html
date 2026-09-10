@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AirPaddle Sandbox Pong</title>
+    <style>
+        body {
+            background: #222;
+            color: #fff;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        #connectionBar {
+            margin-bottom: 10px;
+            display: flex;
+            gap: 8px;
+        }
+        #ipInput {
+            padding: 6px 12px;
+            border-radius: 4px;
+            border: 1px solid #555;
+            background: #333;
+            color: #fff;
+        }
+        #connectBtn {
+            padding: 6px 16px;
+            border-radius: 4px;
+            border: none;
+            background: #4CAF50;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        #scoreboard {
+            font-size: 2rem;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        canvas {
+            border: 6px solid #5d4037;
+            background: #e4cc9f; /* Sand Theme */
+            box-shadow: 0 10px 25px rgba(0,0,0,0.6);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="connectionBar">
+        <input type="text" id="ipInput" placeholder="Enter ESP32 IP (e.g. 192.168.1.50)">
+        <button id="connectBtn" onclick="connectWebSocket()">Connect</button>
+    </div>
+
+    <div id="scoreboard">YOU: <span id="playerScore">0</span> | BOT: <span id="botScore">0</span></div>
+    <canvas id="gameCanvas" width="700" height="450"></canvas>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Game Variables
+    const paddleWidth = 15;
+    const paddleHeight = 80;
+    
+    // Player Paddle
+    let playerY = canvas.height / 2 - paddleHeight / 2;
+    
+    // Bot AI Paddle
+    let botY = canvas.height / 2 - paddleHeight / 2;
+    const botSpeed = 3.5;
+
+    // Scores
+    let playerScore = 0;
+    let botScore = 0;
+
+    // Ball Configurations
+    let ballX = canvas.width / 2;
+    let ballY = canvas.height / 2;
+    let ballRadius = 8;
+    let ballSpeedX = 4;
+    let ballSpeedY = 3;
+
+    // Sensitivity Tuning
+    const sensitivityModifier = 0.20; 
+
+    // Dynamic WebSocket Connection
+    let ws;
+
+    function connectWebSocket() {
+        const ip = document.getElementById('ipInput').value.trim();
+        if (!ip) {
+            alert("Please enter a valid IP address!");
+            return;
+        }
+
+        if (ws) ws.close();
+
+        ws = new WebSocket(`ws://${ip}:81/`);
+
+        ws.onopen = () => {
+            document.getElementById('connectBtn').style.background = '#2196F3';
+            document.getElementById('connectBtn').innerText = 'Connected';
+        };
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            playerY += data.pitch * sensitivityModifier;
+
+            // Keep player paddle inside canvas boundaries
+            if (playerY < 0) playerY = 0;
+            if (playerY > canvas.height - paddleHeight) playerY = canvas.height - paddleHeight;
+        };
+
+        ws.onerror = () => {
+            alert("Failed to connect to ESP32! Check IP and Wi-Fi connection.");
+            document.getElementById('connectBtn').style.background = '#f44336';
+            document.getElementById('connectBtn').innerText = 'Retry';
+        };
+    }
+
+    function updateGame() {
+        // 1. Ball Movement Physics
+        ballX += ballSpeedX;
+        ballY += ballSpeedY;
+
+        // Wall Bounces (Top and Bottom)
+        if (ballY - ballRadius < 0 || ballY + ballRadius > canvas.height) {
+            ballSpeedY = -ballSpeedY;
+        }
+
+        // 2. Bot AI Movement
+        let botCenter = botY + paddleHeight / 2;
+        if (botCenter < ballY - 10) {
+            botY += botSpeed;
+        } else if (botCenter > ballY + 10) {
+            botY -= botSpeed;
+        }
+        
+        // Constrain Bot Paddle
+        if (botY < 0) botY = 0;
+        if (botY > canvas.height - paddleHeight) botY = canvas.height - paddleHeight;
+
+        // 3. Player Collision (Left Side)
+        if (ballX - ballRadius <= paddleWidth + 5) {
+            if (ballY >= playerY && ballY <= playerY + paddleHeight) {
+                ballSpeedX = Math.abs(ballSpeedX); // Guarantee rightward movement
+                ballX = paddleWidth + 5 + ballRadius; // Prevent ball sticking inside paddle
+                let deltaY = ballY - (playerY + paddleHeight / 2);
+                ballSpeedY = deltaY * 0.2;
+            } else if (ballX < 0) {
+                botScore++;
+                document.getElementById('botScore').innerText = botScore;
+                resetBall();
+            }
+        }
+
+        // 4. Bot Collision (Right Side)
+        if (ballX + ballRadius >= canvas.width - paddleWidth - 5) {
+            if (ballY >= botY && ballY <= botY + paddleHeight) {
+                ballSpeedX = -Math.abs(ballSpeedX); // Guarantee leftward movement
+                ballX = canvas.width - paddleWidth - 5 - ballRadius; // Prevent sticking
+                let deltaY = ballY - (botY + paddleHeight / 2);
+                ballSpeedY = deltaY * 0.2;
+            } else if (ballX > canvas.width) {
+                playerScore++;
+                document.getElementById('playerScore').innerText = playerScore;
+                resetBall();
+            }
+        }
+    }
+
+    function resetBall() {
+        ballX = canvas.width / 2;
+        ballY = canvas.height / 2;
+        ballSpeedX = -ballSpeedX; // Serve to the scoring winner
+        ballSpeedY = 3;
+    }
+
+    function drawGame() {
+        // Clear Frame
+        ctx.fillStyle = '#e4cc9f';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Center line
+        ctx.strokeStyle = 'rgba(93, 64, 55, 0.2)';
+        ctx.lineWidth = 4;
+        ctx.setLineDash([10, 10]);
+        ctx.beginPath();
+        ctx.moveTo(canvas.width / 2, 0);
+        ctx.lineTo(canvas.width / 2, canvas.height);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Draw Player Paddle
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(5, playerY, paddleWidth, paddleHeight);
+        ctx.strokeStyle = '#5d4037';
+        ctx.strokeRect(5, playerY, paddleWidth, paddleHeight);
+
+        // Draw Bot Paddle
+        ctx.fillStyle = '#5d4037';
+        ctx.fillRect(canvas.width - paddleWidth - 5, botY, paddleWidth, paddleHeight);
+
+        // Draw Ball
+        ctx.fillStyle = '#d32f2f';
+        ctx.beginPath();
+        ctx.arc(ballX, ballY, ballRadius, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    function gameLoop() {
+        updateGame();
+        drawGame();
+        requestAnimationFrame(gameLoop);
+    }
+
+    // Start rendering engine
+    gameLoop();
+</script>
+</body>
+</html>
